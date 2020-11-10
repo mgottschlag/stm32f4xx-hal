@@ -299,6 +299,18 @@ macro_rules! tim_channels {
     };
 }
 
+/// Wrapper type for 16-bit transfers via the SPI peripheral, as required for I2S.
+pub struct I2S<T>(T);
+
+impl<T> Deref for I2S<T> {
+    type Target = T;
+
+    #[inline(always)]
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 /// A channel that can be configured on a DMA stream.
 pub trait Channel: Bits<u8> {
     /// Returns a new instance of the type.
@@ -1423,3 +1435,74 @@ address!(
     (pac::SAI2, ??),
 );
 */
+
+// TODO: More devices support I2S multiplexed onto SPI.
+#[cfg(any(
+    feature = "stm32f417",
+    feature = "stm32f415",
+    feature = "stm32f405",
+    feature = "stm32f407",
+    feature = "stm32f427",
+    feature = "stm32f439",
+    feature = "stm32f437",
+    feature = "stm32f429",
+))]
+dma_map!(
+    (
+        Stream0<DMA1>,
+        Channel0,
+        I2S::<pac::SPI3>,
+        PeripheralToMemory
+    ), // SPI3_RX
+    (Stream0<DMA1>, Channel3, pac::I2S3EXT, PeripheralToMemory), // I2S3_EXT_RX
+    (
+        Stream2<DMA1>,
+        Channel0,
+        I2S::<pac::SPI3>,
+        PeripheralToMemory
+    ), // SPI3_RX
+    (Stream2<DMA1>, Channel2, pac::I2S3EXT, PeripheralToMemory), // I2S3_EXT_RX
+    (
+        Stream3<DMA1>,
+        Channel0,
+        I2S::<pac::SPI2>,
+        PeripheralToMemory
+    ), // SPI2_RX
+    (Stream3<DMA1>, Channel3, pac::I2S2EXT, PeripheralToMemory), // I2S2_EXT_RX
+    (
+        Stream4<DMA1>,
+        Channel0,
+        I2S::<pac::SPI2>,
+        MemoryToPeripheral
+    ), // SPI2_TX
+    (Stream4<DMA1>, Channel2, pac::I2S2EXT, MemoryToPeripheral), // I2S2_EXT_TX
+    (
+        Stream5<DMA1>,
+        Channel0,
+        I2S::<pac::SPI3>,
+        MemoryToPeripheral
+    ), // SPI3_TX
+    (Stream5<DMA1>, Channel2, pac::I2S3EXT, MemoryToPeripheral), // I2S3_EXT_TX
+    (
+        Stream7<DMA1>,
+        Channel0,
+        I2S::<pac::SPI3>,
+        MemoryToPeripheral
+    ), // SPI3_TX
+);
+#[cfg(any(
+    feature = "stm32f417",
+    feature = "stm32f415",
+    feature = "stm32f405",
+    feature = "stm32f407",
+    feature = "stm32f427",
+    feature = "stm32f439",
+    feature = "stm32f437",
+    feature = "stm32f429",
+))]
+address!(
+    (I2S::<pac::SPI2>, dr, u16),
+    (I2S::<pac::SPI3>, dr, u16),
+    (pac::I2S2EXT, dr, u16),
+    (pac::I2S3EXT, dr, u16),
+);
