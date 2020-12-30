@@ -221,6 +221,7 @@ pub struct I2sPll {
     pub use_pll: bool,
     /// "M" divisor, required for the other PLLs on some MCUs.
     pub m: Option<u32>,
+    /// PLL I2S clock output.
     pub plli2sclk: Option<u32>,
 }
 
@@ -266,6 +267,7 @@ impl I2sPll {
         feature = "stm32f479"
     ))]
     pub fn setup_shared_m(pllsrcclk: u32, m: Option<u32>, plli2sclk: Option<u32>) -> I2sPll {
+        // "m" is None if the main PLL is not in use.
         let m = if let Some(m) = m {
             m
         } else {
@@ -282,8 +284,9 @@ impl I2sPll {
     }
 
     fn optimize_fixed_m(pllsrcclk: u32, m: u32, plli2sclk: u32) -> (I2sPll, SingleOutputPll, u32) {
-        let (config, real_plli2sclk, error) = SingleOutputPll::optimize(pllsrcclk, m, plli2sclk)
-            .expect("did not find any valid I2S PLL config");
+        let (config, real_plli2sclk, error) =
+            SingleOutputPll::optimize(pllsrcclk, m, plli2sclk, 2, 7)
+                .expect("did not find any valid I2S PLL config");
         (
             I2sPll {
                 use_pll: true,
@@ -332,7 +335,8 @@ impl I2sPll {
 ))]
 pub struct SaiPll {
     pub use_pll: bool,
-    pub pllsaiclk: Option<u32>,
+    /// SAI clock (PLL output divided by the SAI clock divider).
+    pub sai_clk: Option<u32>,
 }
 
 #[cfg(any(
@@ -348,12 +352,12 @@ impl SaiPll {
     pub fn unused() -> SaiPll {
         SaiPll {
             use_pll: false,
-            pllsaiclk: None,
+            sai_clk: None,
         }
     }
 
-    pub fn setup(pllsrcclk: u32, pllsaiclk: Option<u32>) -> SaiPll {
-        let target = if let Some(clk) = pllsaiclk {
+    pub fn setup(pllsrcclk: u32, sai_clk: Option<u32>) -> SaiPll {
+        let target = if let Some(clk) = sai_clk {
             clk
         } else {
             return Self::unused();
@@ -378,13 +382,14 @@ impl SaiPll {
         feature = "stm32f469",
         feature = "stm32f479"
     ))]
-    pub fn setup_shared_m(pllsrcclk: u32, m: Option<u32>, pllsaiclk: Option<u32>) -> SaiPll {
+    pub fn setup_shared_m(pllsrcclk: u32, m: Option<u32>, sai_clk: Option<u32>) -> SaiPll {
+        // "m" is None if both other PLLs are not in use.
         let m = if let Some(m) = m {
             m
         } else {
-            return Self::setup(pllsrcclk, pllsaiclk);
+            return Self::setup(pllsrcclk, sai_clk);
         };
-        let target = if let Some(clk) = pllsaiclk {
+        let target = if let Some(clk) = sai_clk {
             clk
         } else {
             return Self::unused();
@@ -397,21 +402,23 @@ impl SaiPll {
     fn optimize_fixed_m(
         pllsrcclk: u32,
         m: u32,
-        pllsaiclk: u32,
+        sai_clk: u32,
     ) -> (SaiPll, SingleOutputPll, u32, u32) {
-        let (config, saidiv, real_pllsaiclk, error) = (1..=32)
+        // NOTE: This code tests lots of configurations due to the nested loops for the two
+        // dividers. A smarter approach can probably speed up the search.
+        let (config, saidiv, real_sai_clk, error) = (1..=32)
             .filter_map(|saidiv| {
-                let target = pllsaiclk * saidiv;
-                let (config, real_pllsaiclk, error) =
-                    SingleOutputPll::optimize(pllsrcclk, m, target)?;
-                Some((config, saidiv, real_pllsaiclk, error))
+                let target = sai_clk * saidiv;
+                let (config, real_sai_clk, error) =
+                    SingleOutputPll::optimize(pllsrcclk, m, target, 2, 15)?;
+                Some((config, saidiv, real_sai_clk, error))
             })
             .min_by_key(|(_, _, _, error)| *error)
             .expect("no suitable I2S PLL configuration found");
         (
             SaiPll {
                 use_pll: true,
-                pllsaiclk: Some(real_pllsaiclk),
+                sai_clk: Some(real_sai_clk),
             },
             config,
             saidiv,
@@ -452,10 +459,18 @@ struct SingleOutputPll {
 
 #[cfg(not(feature = "stm32f410"))]
 impl SingleOutputPll {
-    fn optimize(pllsrcclk: u32, m: u32, target: u32) -> Option<(SingleOutputPll, u32, u32)> {
+    fn optimize(
+        pllsrcclk: u32,
+        m: u32,
+        target: u32,
+        min_div: u32,
+        max_div: u32,
+    ) -> Option<(SingleOutputPll, u32, u32)> {
         let vco_in = pllsrcclk / m;
 
-        let (n, outdiv, output, error) = (2..=7)
+        // We loop through the possible divider values to find the best configuration. Looping
+        // through all possible "N" values would result in more iterations.
+        let (n, outdiv, output, error) = (min_div..=max_div)
             .filter_map(|outdiv| {
                 let target_vco_out = target * outdiv;
                 let n = (target_vco_out + (vco_in >> 1)) / vco_in;
